@@ -1,0 +1,196 @@
+---
+title: "BAA1030 Assignment 2 - Child Mortality Analysis"
+author: "Zahin Izhar Azahir"
+format:
+  html:
+    embed-resources: true
+    code-fold: true
+    theme: journal
+execute:
+  engine: python
+editor: visual
+---
+
+# Executive Summary
+
+This dashboard presents a global analysis of child mortality, focusing on countries most affected, the economic factors linked to survival rates, and the worldwide trends in reducing child deaths. Through visual storytelling, the report highlights key areas where significant progress has been made — and where urgent interventions are still needed.
+
+# Introduction
+
+Child mortality remains one of the most pressing global health challenges, particularly in low- and middle-income countries. This report examines child deaths across nations, investigates how economic development relates to survival outcomes, and tracks the overall progress made in reducing child mortality over time. By understanding these patterns, we can better target policies and interventions to save lives.
+
+# Data Loading and Preparation
+
+```{python}
+import polars as pl
+import plotnine as pn
+import geopandas as gpd
+import matplotlib.pyplot as plt
+
+# Load data
+indicator_2 = pl.read_csv("unicef_indicator_2.csv")
+```
+
+# Data Cleaning and Transformation
+
+```{python}
+# Focus on relevant indicator: Deaths age 1-59 months
+child_deaths = indicator_2.filter(pl.col("indicator") == "Deaths age 1-59 months")
+
+# Grouping by country and year
+child_deaths_grouped = child_deaths.select([
+    "country", "time_period", "obs_value"
+])
+
+# Global trend (sum across all countries per year)
+global_deaths = child_deaths_grouped.group_by("time_period").agg(
+    pl.col("obs_value").sum().alias("total_deaths")
+)
+
+# Get latest year for each country
+latest_year = child_deaths_grouped.group_by("country").agg(
+    pl.col("time_period").max().alias("latest_year")
+)
+
+# Join based only on "country"
+latest_deaths = child_deaths_grouped.join(latest_year, on="country")
+
+# Filter to keep only records with the latest year
+latest_deaths = latest_deaths.filter(
+    pl.col("time_period") == pl.col("latest_year")
+)
+```
+
+# Global Overview
+
+## World Map: Global Child Mortality (Latest Available Year)
+
+```{python}
+# Load manually downloaded Natural Earth shapefile
+world = gpd.read_file("data/ne_110m_admin_0_countries.shp")
+
+# Prepare deaths data
+deaths_map_data = latest_deaths.to_pandas()
+deaths_map_data = deaths_map_data.rename(columns={"country": "ADMIN"})
+
+# Merge deaths with world map
+world_deaths = world.merge(deaths_map_data, on="ADMIN", how="left")
+
+# Plot World Map
+fig, ax = plt.subplots(figsize=(18, 12))
+
+world_deaths.plot(
+    column="obs_value",
+    cmap="YlOrRd",
+    linewidth=0.5,
+    ax=ax,
+    edgecolor="black",
+    legend=True,
+    legend_kwds={
+        'label': "Number of Child Deaths",
+        'orientation': "horizontal",
+        'shrink': 0.7,
+        'pad': 0.02
+    },
+    missing_kwds={
+        "color": "lightgrey",
+        "edgecolor": "white",
+        "hatch": "///",
+        "label": "No Data Available"
+    }
+)
+
+ax.set_title("Global Distribution of Child Mortality (Latest Available Year)", fontdict={
+    'fontsize': 24, 'fontweight': 'bold'
+})
+ax.set_axis_off()
+plt.show()
+```
+
+> **Note:** Darker colors represent higher child deaths; grey areas indicate no data.
+
+# Impacted Countries
+
+## Top 20 Countries (Child Deaths)
+
+```{python}
+# Select top 20 countries
+top20_countries = latest_deaths.sort("obs_value", descending=True).head(20)
+
+# Plot (polished)
+pn.ggplot(top20_countries.to_pandas(), pn.aes(x='country', y='obs_value', fill='obs_value')) +\
+    pn.geom_col(color="black", size=0.3) +\
+    pn.scale_fill_gradient(low="#f5deb3", high="#8b4513", name="Deaths") +\
+    pn.theme_minimal() +\
+    pn.theme(
+        axis_text_x=pn.element_text(rotation=45, hjust=1, size=10),
+        axis_title=pn.element_text(size=12),
+        plot_title=pn.element_text(size=14, weight="bold"),
+        legend_title=pn.element_text(size=10)
+    ) +\
+    pn.labs(
+        title="Top 20 Countries by Child Deaths",
+        y="Number of Child Deaths",
+        x="Country"
+    )
+```
+
+# Economic Factors
+
+## Relationship Between GDP and Child Deaths
+
+```{python}
+# Load metadata
+gdp_data = pl.read_csv("unicef_metadata.csv", infer_schema_length=10000)
+
+# Merge GDP with child deaths
+deaths_gdp = latest_deaths.join(
+    gdp_data.select(["country", "GDP per capita (constant 2015 US$)"]),
+    on="country"
+)
+
+# Drop rows with missing GDP values
+deaths_gdp = deaths_gdp.drop_nulls()
+
+# Improved Scatter Plot with linear model
+pn.ggplot(deaths_gdp.to_pandas(), pn.aes(x='GDP per capita (constant 2015 US$)', y='obs_value')) +\
+    pn.geom_point(color='forestgreen', alpha=0.5, size=2.5) +\
+    pn.geom_smooth(method='lm', color='darkred', linetype='dashed', se=False) +\
+    pn.scale_x_log10() +\
+    pn.coord_cartesian(xlim=(100, 20000), ylim=(0, 200000)) +\
+    pn.theme_minimal() +\
+    pn.theme(
+        axis_title=pn.element_text(size=12),
+        plot_title=pn.element_text(size=14, weight="bold")
+    ) +\
+    pn.labs(
+        title="Relationship Between GDP per Capita and Child Deaths",
+        x="GDP per Capita (USD, Log Scale)",
+        y="Number of Child Deaths"
+    )
+```
+
+# Global Progress
+
+## Global Trend in Child Mortality Over Time
+
+```{python}
+# Plot Line Chart (polished)
+pn.ggplot(global_deaths.to_pandas(), pn.aes(x='time_period', y='total_deaths')) +\
+    pn.geom_line(color='firebrick', size=1.2) +\
+    pn.geom_point(color='black', size=2) +\
+    pn.theme_minimal() +\
+    pn.theme(
+        axis_title=pn.element_text(size=12),
+        plot_title=pn.element_text(size=14, weight="bold")
+    ) +\
+    pn.labs(
+        title="Global Child Mortality Trend Over Time",
+        x="Year",
+        y="Total Child Deaths (Worldwide)"
+    )
+```
+
+# Conclusion
+
+This analysis reveals significant disparities in child mortality across countries, closely linked to economic development.While global child deaths have decreased over time, the burden remains heaviest in lower-income regions. Addressing these gaps requires targeted interventions, sustainable economic growth, and strengthened healthcare systems. Continued global efforts are critical to ensure that every child, regardless of where they are born, has an equal chance at survival.
